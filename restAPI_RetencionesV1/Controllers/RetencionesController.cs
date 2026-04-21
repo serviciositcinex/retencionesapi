@@ -1,4 +1,3 @@
-using dllConnect.ADO_Net;
 using restAPI_RetencionesV1.Class;
 using restAPI_RetencionesV1.Models;
 using System;
@@ -6,13 +5,12 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Configuration;
 using System.Data;
+using System.Data.SqlClient;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Reflection;
-using System.Runtime.Serialization.Formatters.Binary;
 using System.Web;
 using System.Web.Http;
 using System.Web.Http.Cors;
@@ -20,102 +18,96 @@ using System.Web.Http.Cors;
 namespace restAPI_RetencionesV1.Controllers
 {
     [EnableCors(origins: "*", headers: "*", methods: "*")]
-
+    [RoutePrefix("api/Retenciones")]
     public class RetencionesController : ApiController
     {
         CultureInfo esVE = CultureInfo.CreateSpecificCulture("es-VE");
         static clsExcel excel = new clsExcel();
-        DataTable dt = null;
-        static string strFilePath;
-        static string strFilePath_destino = string.Empty;
+
         public RetencionesController()
         {
-            dllConnect.ADO_Net.Conexion.connectString = ConfigurationManager.AppSettings["SAP"];
+        }
 
-            //Log("Conexion: " + ConfigurationManager.AppSettings[complejo]);
+        private DataTable ExecuteStoredProcedure(string spName, Dictionary<string, object> parameters = null)
+        {
+            var connectString = ConfigurationManager.AppSettings["SAP"];
+            using (SqlConnection conn = new SqlConnection(connectString))
+            {
+                using (SqlCommand cmd = new SqlCommand(spName, conn))
+                {
+                    cmd.CommandType = CommandType.StoredProcedure;
+                    if (parameters != null)
+                    {
+                        foreach (var param in parameters)
+                        {
+                            cmd.Parameters.AddWithValue("@" + param.Key, param.Value ?? DBNull.Value);
+                        }
+                    }
 
+                    using (SqlDataAdapter da = new SqlDataAdapter(cmd))
+                    {
+                        DataTable resultTable = new DataTable();
+                        da.Fill(resultTable);
+                        return resultTable;
+                    }
+                }
+            }
         }
 
         [HttpGet]
+        [Route("GetRetenciones/{valor1?}/{valor2?}/{valor3?}/{valor4?}/{valor5?}")]
         [Description("Obtiene las retenciones asociadas a un vendedor")]
         public IEnumerable<Retenciones> GetRetenciones(string valor1 = null, string valor2 = null, string valor3 = null, string valor4 = null, string valor5 = "N")
         {
-
-            ADO_V2 adonet;
-            DataTable dt = new DataTable();
             List<Retenciones> lst = new List<Retenciones>();
-
-            if (!string.IsNullOrEmpty(valor4) && valor4.ToUpper() == "NULL")
-            {
-                valor4 = null;
-            }
+            if (!string.IsNullOrEmpty(valor4) && valor4.ToUpper() == "NULL") valor4 = null;
 
             try
             {
-                adonet = new ADO_V2();
-                adonet.SP = "SP_CRI";
-                // SP_CRI espera: @SN1, @SN2, @F1, @F2
-                adonet.AgregarParametro("SN1", ADO_V2.enumTipo_de_Datos._nvarchar, valor1);
-                adonet.AgregarParametro("SN2", ADO_V2.enumTipo_de_Datos._nvarchar, valor2);
-                adonet.AgregarParametro("F1", ADO_V2.enumTipo_de_Datos._nvarchar, valor3);
-                adonet.AgregarParametro("F2", ADO_V2.enumTipo_de_Datos._nvarchar, valor4);
-                adonet.leer();
-
-                dt = adonet.DS.Tables[0];
+                var parameters = new Dictionary<string, object>
+                {
+                    { "SN1", valor1 },
+                    { "SN2", valor2 },
+                    { "F1", valor3 },
+                    { "F2", valor4 }
+                };
+                
+                DataTable dt = ExecuteStoredProcedure("SP_CRI", parameters);
 
                 foreach (DataRow dr in dt.Rows)
                 {
                     lst.Add(new Retenciones
                     {
-                        // Mapeo actualizado según lista proporcionada:
-                        // RifAgente -> RifCompania
                         RifCompania = dr[0].ToString(),
-                        // NombreAgente -> Compania
                         Compania = dr[1].ToString(),
-                        // DirAgente -> DireccionCompania
                         DireccionCompania = dr[2].ToString(),
-                        // Rif -> RifProv
                         RifProv = dr[3].ToString(),
-                        // Nombre -> Nombre (se mantiene nombre, tamaño en BD es nvarchar(50))
                         Nombre = dr[4].ToString(),
-                        // Email -> E_mail
                         E_mail = dr[5].ToString(),
-                        // NroComprobante -> NroComprobante (nota: ISLR no usa comprobante)
                         NroComprobante = dr[6].ToString(),
-                        // VCHRNMBR -> DocEntry
                         DocEntry = dr[7].ToString(),
-                        // TipoDocumento -> TipoDoc
                         TipoDoc = dr[8].ToString(),
-                        // NroFactura -> FAC
                         FAC = dr[9].ToString(),
-                        // FechaDocumento -> FechaRet
                         FechaRet = (DateTime)dr[10],
-                        // FechaEmision -> FecFactura
                         FecFactura = (DateTime)dr[11],
-                        // MontoImpuesto -> MontoRetenido
                         MontoRetenido = Convert.ToDecimal(dr[12].ToString()),
-                        // MontoRetencion (se mantiene si el SP devuelve este valor en la columna 13)
                         MontoRetencion = Convert.ToDecimal(dr[13].ToString()),
-                        // BaseImponible -> BaseImponible (misma propiedad)
                         BaseImponible = Convert.ToDecimal(dr[14].ToString()),
-                        // MontoTotal -> BaseIVA
                         BaseIVA = Convert.ToDecimal(dr[15].ToString()),
                         Id = Convert.ToInt32(dr[16].ToString())
                     });
-                    //lst.Add(new ComplejoActivo { area = dr[0].ToString(), rif = dr[1].ToString(), descripcion = dr[2].ToString(), complejo = dr[3].ToString(), codigo = dr[4].ToString(), grupo = dr[5].ToString() });
                 }
 
                 if (!string.IsNullOrEmpty(valor5) && valor5.ToUpper() == "Y")
                 {
                     Export_to_Excel(dt);
                 }
-
             }
             catch (Exception ex)
             {
-                string Ex = ex.Message;
                 Log(ex.Message);
-                dt = null;
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
+                else throw;
             }
 
             HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
@@ -123,32 +115,26 @@ namespace restAPI_RetencionesV1.Controllers
         }
 
         [HttpGet]
+        [Route("GetRetenciones_xls/{valor1?}/{valor2?}/{valor3?}/{valor4?}")]
         [Description("Obtiene las retenciones asociadas a un vendedor y exporta a excel")]
         public byte[] GetRetenciones_xls(string valor1 = null, string valor2 = null, string valor3 = null, string valor4 = null)
         {
-
-            ADO_V2 adonet;
             DataTable dt = new DataTable();
-            List<Retenciones> lst = new List<Retenciones>();
-
             try
             {
-                adonet = new ADO_V2();
-                adonet.SP = "SP_CRI";
-                adonet.AgregarParametro("SN1", ADO_V2.enumTipo_de_Datos._nvarchar, valor1);
-                adonet.AgregarParametro("SN2", ADO_V2.enumTipo_de_Datos._nvarchar, valor2);
-                adonet.AgregarParametro("F1", ADO_V2.enumTipo_de_Datos._nvarchar, valor3);
-                adonet.AgregarParametro("F2", ADO_V2.enumTipo_de_Datos._nvarchar, valor4);
-                adonet.leer();
-
-                dt = adonet.DS.Tables[0];
-
+                var parameters = new Dictionary<string, object>
+                {
+                    { "SN1", valor1 },
+                    { "SN2", valor2 },
+                    { "F1", valor3 },
+                    { "F2", valor4 }
+                };
+                dt = ExecuteStoredProcedure("SP_CRI", parameters);
             }
             catch (Exception ex)
             {
-                string Ex = ex.Message;
                 Log(ex.Message);
-                dt = null;
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
             }
 
             HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
@@ -156,26 +142,21 @@ namespace restAPI_RetencionesV1.Controllers
         }
 
         [HttpGet]
+        [Route("GetProveedores_Retenciones/{valor1?}/{valor2?}")]
         [Description("Obtiene las retenciones asociadas a un vendedor")]
         public IEnumerable<Proveedores_Retenciones> GetProveedores_Retenciones(string valor1 = null, string valor2 = null)
         {
-
-            ADO_V2 adonet;
-            DataTable dt = new DataTable();
             List<Proveedores_Retenciones> lst = new List<Proveedores_Retenciones>();
-
             try
             {
-                adonet = new ADO_V2();
-                adonet.SP = "SP_CRI";
-                // Mapear vendor/empresa a SN1/SN2, filtros adicionales vacíos
-                adonet.AgregarParametro("SN1", ADO_V2.enumTipo_de_Datos._nvarchar, valor1);
-                adonet.AgregarParametro("SN2", ADO_V2.enumTipo_de_Datos._nvarchar, valor2);
-                adonet.AgregarParametro("F1", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.AgregarParametro("F2", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.leer();
-
-                dt = adonet.DS.Tables[0];
+                var parameters = new Dictionary<string, object>
+                {
+                    { "SN1", valor1 },
+                    { "SN2", valor2 },
+                    { "F1", null },
+                    { "F2", null }
+                };
+                DataTable dt = ExecuteStoredProcedure("SP_CRI", parameters);
 
                 foreach (DataRow dr in dt.Rows)
                 {
@@ -193,13 +174,11 @@ namespace restAPI_RetencionesV1.Controllers
                         Tipo = dr[9].ToString()
                     });
                 }
-
             }
             catch (Exception ex)
             {
-                string Ex = ex.Message;
                 Log(ex.Message);
-                dt = null;
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
             }
 
             HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
@@ -207,26 +186,21 @@ namespace restAPI_RetencionesV1.Controllers
         }
 
         [HttpGet]
+        [Route("GetProveedores_RetencionesDetalles/{valor1?}/{valor2?}/{valor3?}")]
         [Description("Obtiene el detalle de las retenciones asociadas a un vendedor")]
         public IEnumerable<Proveedores_RetencionesDetalles> GetProveedores_RetencionesDetalles(string valor1 = null, string valor2 = null, string valor3 = null)
         {
-
-            ADO_V2 adonet;
-            DataTable dt = new DataTable();
             List<Proveedores_RetencionesDetalles> lst = new List<Proveedores_RetencionesDetalles>();
-
             try
             {
-                adonet = new ADO_V2();
-                adonet.SP = "SP_CRI";
-                // valor3 mapeado a F1 (filtro)
-                adonet.AgregarParametro("SN1", ADO_V2.enumTipo_de_Datos._nvarchar, valor1);
-                adonet.AgregarParametro("SN2", ADO_V2.enumTipo_de_Datos._nvarchar, valor2);
-                adonet.AgregarParametro("F1", ADO_V2.enumTipo_de_Datos._nvarchar, valor3);
-                adonet.AgregarParametro("F2", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.leer();
-
-                dt = adonet.DS.Tables[0];
+                var parameters = new Dictionary<string, object>
+                {
+                    { "SN1", valor1 },
+                    { "SN2", valor2 },
+                    { "F1", valor3 },
+                    { "F2", null }
+                };
+                DataTable dt = ExecuteStoredProcedure("SP_CRI", parameters);
 
                 foreach (DataRow dr in dt.Rows)
                 {
@@ -242,13 +216,11 @@ namespace restAPI_RetencionesV1.Controllers
                         VENDORID = dr[7].ToString()
                     });
                 }
-
             }
             catch (Exception ex)
             {
-                string Ex = ex.Message;
                 Log(ex.Message);
-                dt = null;
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
             }
 
             HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
@@ -256,26 +228,21 @@ namespace restAPI_RetencionesV1.Controllers
         }
 
         [HttpGet]
+        [Route("GetProveedores_Datos/{valor1?}")]
         [Description("Obtiene los datos de un proveedor")]
         public IEnumerable<Proveedores_Datos> GetProveedores_Datos(string valor1 = null)
         {
-
-            ADO_V2 adonet;
-            DataTable dt = new DataTable();
             List<Proveedores_Datos> lst = new List<Proveedores_Datos>();
-
             try
             {
-                adonet = new ADO_V2();
-                adonet.SP = "SP_CRI";
-                // vendor -> SN1
-                adonet.AgregarParametro("SN1", ADO_V2.enumTipo_de_Datos._nvarchar, valor1);
-                adonet.AgregarParametro("SN2", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.AgregarParametro("F1", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.AgregarParametro("F2", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.leer();
-
-                dt = adonet.DS.Tables[0];
+                var parameters = new Dictionary<string, object>
+                {
+                    { "SN1", valor1 },
+                    { "SN2", null },
+                    { "F1", null },
+                    { "F2", null }
+                };
+                DataTable dt = ExecuteStoredProcedure("SP_CRI", parameters);
 
                 foreach (DataRow dr in dt.Rows)
                 {
@@ -287,13 +254,11 @@ namespace restAPI_RetencionesV1.Controllers
                         Correo = dr[3].ToString(),
                     });
                 }
-
             }
             catch (Exception ex)
             {
-                string Ex = ex.Message;
                 Log(ex.Message);
-                dt = null;
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
             }
 
             HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
@@ -301,25 +266,21 @@ namespace restAPI_RetencionesV1.Controllers
         }
 
         [HttpGet]
+        [Route("GetProveedores_Empresas/{valor1?}")]
         [Description("Obtiene las empresas en las cuales el proveedor este registrado")]
         public IEnumerable<Proveedores_Empresas> GetProveedores_Empresas(string valor1 = null)
         {
-
-            ADO_V2 adonet;
-            DataTable dt = new DataTable();
             List<Proveedores_Empresas> lst = new List<Proveedores_Empresas>();
-
             try
             {
-                adonet = new ADO_V2();
-                adonet.SP = "SP_CRI";
-                adonet.AgregarParametro("SN1", ADO_V2.enumTipo_de_Datos._nvarchar, valor1);
-                adonet.AgregarParametro("SN2", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.AgregarParametro("F1", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.AgregarParametro("F2", ADO_V2.enumTipo_de_Datos._nvarchar, null);
-                adonet.leer();
-
-                dt = adonet.DS.Tables[0];
+                var parameters = new Dictionary<string, object>
+                {
+                    { "SN1", valor1 },
+                    { "SN2", null },
+                    { "F1", null },
+                    { "F2", null }
+                };
+                DataTable dt = ExecuteStoredProcedure("SP_CRI", parameters);
 
                 foreach (DataRow dr in dt.Rows)
                 {
@@ -329,37 +290,64 @@ namespace restAPI_RetencionesV1.Controllers
                         Inter = dr[1].ToString(),
                     });
                 }
-
             }
             catch (Exception ex)
             {
-                string Ex = ex.Message;
                 Log(ex.Message);
-                dt = null;
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
             }
 
             HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
             return lst;
         }
 
+        [HttpGet]
+        [Route("GetProveedores_Empresas_Todos")]
+        [Description("Obtiene las empresas en las cuales el proveedor este registrado")]
+        public IEnumerable<Proveedores_Empresas> GetProveedores_Empresas_Todos()
+        {
+            List<Proveedores_Empresas> lst = new List<Proveedores_Empresas>();
+            try
+            {
+                DataTable dt = ExecuteStoredProcedure("USP_CRI_Reciente_Automatico");
+
+                foreach (DataRow dr in dt.Rows)
+                {
+                    lst.Add(new Proveedores_Empresas
+                    {
+                        Empresa = dr[0].ToString(),
+                        Inter = dr[1].ToString(),
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log(ex.Message);
+                // Aquí la excepción nativa de base de datos explotará y nos dirá si es error de logon, procedimiento inexistente, etc.
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
+                else throw;
+            }
+
+            HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
+            return lst;
+        }
 
         [HttpGet]
+        [Route("GetRetenciones_ISLR_xls/{valor1?}/{valor2?}/{valor3?}/{valor4?}")]
         [Description("Obtiene las retenciones de ISLR asociadas a un vendedor y exporta a excel")]
         public IHttpActionResult GetRetenciones_ISLR_xls(string valor1 = null, string valor2 = null, string valor3 = null, string valor4 = null)
         {
-            ADO_V2 adonet = new ADO_V2();
             DataTable dt = null;
-
             try
             {
-                adonet.SP = "SP_CR_ISLR_PORTAL";
-                adonet.AgregarParametro("SN1", ADO_V2.enumTipo_de_Datos._nvarchar, valor1);
-                adonet.AgregarParametro("SN2", ADO_V2.enumTipo_de_Datos._nvarchar, valor2);
-                adonet.AgregarParametro("F1", ADO_V2.enumTipo_de_Datos._nvarchar, valor3);
-                adonet.AgregarParametro("F2", ADO_V2.enumTipo_de_Datos._nvarchar, valor4);
-                adonet.leer();
-
-                dt = (adonet.DS != null && adonet.DS.Tables.Count > 0) ? adonet.DS.Tables[0] : null;
+                var parameters = new Dictionary<string, object>
+                {
+                    { "SN1", valor1 },
+                    { "SN2", valor2 },
+                    { "F1", valor3 },
+                    { "F2", valor4 }
+                };
+                dt = ExecuteStoredProcedure("SP_CR_ISLR_PORTAL", parameters);
             }
             catch (Exception ex)
             {
@@ -371,7 +359,6 @@ namespace restAPI_RetencionesV1.Controllers
 
             if (dt == null || dt.Rows.Count == 0)
             {
-                // No hay datos: informar al cliente
                 return Content(HttpStatusCode.NoContent, new { Message = "No se encontraron registros para los filtros indicados." });
             }
 
@@ -396,7 +383,7 @@ namespace restAPI_RetencionesV1.Controllers
             };
 
             response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-            var fileName = $"RETENCIONES_ISLR_{DateTime.Now:yyyyMMddHHmmss}.xlsx";
+            var fileName = string.Format("RETENCIONES_ISLR_{0}.xlsx", DateTime.Now.ToString("yyyyMMddHHmmss"));
             response.Content.Headers.ContentDisposition = new System.Net.Http.Headers.ContentDispositionHeaderValue("attachment")
             {
                 FileName = fileName
@@ -405,17 +392,11 @@ namespace restAPI_RetencionesV1.Controllers
             return ResponseMessage(response);
         }
 
-        /// <summary>
-        /// Exporta y escribe en disco el archivo
-        /// </summary>
-        /// <param name="dt_Consulta">data con las retenciones</param>
         private void Export_to_Excel(DataTable dt_Consulta)
         {
             var file = "Formato_RETIVA.xlsx";
-            var strFilePath = AppDomain.CurrentDomain.BaseDirectory + @"Resources\Template\" + file;
-
-            byte[] vByte = excel.Generar_Excel_Retenciones(dt_Consulta, strFilePath);
-
+            var strFilePathTemplate = AppDomain.CurrentDomain.BaseDirectory + @"Resources\Template\" + file;
+            byte[] vByte = excel.Generar_Excel_Retenciones(dt_Consulta, strFilePathTemplate);
             var vDirectorio = @"C:\temp2\";
 
             if (!Directory.Exists(vDirectorio))
@@ -424,21 +405,13 @@ namespace restAPI_RetencionesV1.Controllers
             }
 
             bool resp = ByteArrayToFile(vDirectorio + DateTime.Now.Year.ToString() + DateTime.Now.Month.ToString() + DateTime.Now.Day.ToString() + "_" + DateTime.Now.Hour.ToString() + DateTime.Now.Minute.ToString() + DateTime.Now.Second.ToString() + " - RETENCIONES -" + (dt_Consulta.Rows.Count > 1 ? dt_Consulta.Rows[1][1].ToString() : "") + " - " + (dt_Consulta.Rows.Count > 1 ? dt_Consulta.Rows[1][4].ToString() : "") + " - " + (dt_Consulta.Rows.Count > 1 ? dt_Consulta.Rows[1][6].ToString() : "") + ".xlsx", vByte);
-
         }
 
-        /// <summary>
-        /// genera un array de byte para guardar del lado del cliente
-        /// </summary>
-        /// <param name="dt_Consulta">data con las retenciones</param>
-        /// <returns></returns>
         private byte[] Export_to_Excel_Byte(DataTable dt_Consulta)
         {
             var file = "Formato_RETIVA.xlsx";
-            var strFilePath = AppDomain.CurrentDomain.BaseDirectory + @"Resources\Template\" + file;
-
-            byte[] vByte = excel.Generar_Excel_Retenciones(dt_Consulta, strFilePath);
-
+            var strFilePathTemplate = AppDomain.CurrentDomain.BaseDirectory + @"Resources\Template\" + file;
+            byte[] vByte = excel.Generar_Excel_Retenciones(dt_Consulta, strFilePathTemplate);
             var vDirectorio = @"C:\temp2\";
 
             if (!Directory.Exists(vDirectorio))
@@ -454,10 +427,8 @@ namespace restAPI_RetencionesV1.Controllers
         private byte[] ExportISLR_to_Excel_Byte(DataTable dt_Consulta)
         {
             var file = "Formato_RETISLR.xlsx";
-            var strFilePath = AppDomain.CurrentDomain.BaseDirectory + @"Resources\Template\" + file;
-
-            byte[] vByte = excel.Generar_Excel_RetencionesISLR(dt_Consulta, strFilePath);
-
+            var strFilePathTemplate = AppDomain.CurrentDomain.BaseDirectory + @"Resources\Template\" + file;
+            byte[] vByte = excel.Generar_Excel_RetencionesISLR(dt_Consulta, strFilePathTemplate);
             var vDirectorio = @"C:\temp2\";
 
             if (!Directory.Exists(vDirectorio))
@@ -487,56 +458,37 @@ namespace restAPI_RetencionesV1.Controllers
             }
         }
 
-        /// <summary>
-        /// Genera un log de los procesos del API
-        /// </summary>
-        /// <param name="mensaje">mensaje a guardar</param>
         public void Log(string mensaje)
         {
-
         }
 
         #region ARCV
 
-        //http://localhost:1503/api/Retenciones/GetRetenciones_ARCV_xls/RPSAS/J-409131351/2023
-
-        /// <summary>
-        /// Obtiene las retenciones para el ARCV asociadas a un vendedor y exporta a excel
-        /// </summary>
-        /// <param name="valor1">Empresa</param>
-        /// <param name="valor2">RIF</param>
-        /// <param name="valor3">Año a consultar</param>
-        /// <returns></returns>
         [HttpGet]
+        [Route("GetRetenciones_ARCV_xls/{valor1?}/{valor2?}/{valor3?}")]
         [Description("Obtiene las retenciones para el ARCV asociadas a un vendedor y exporta a excel")]
         public byte[] GetRetenciones_ARCV_xls(string valor1 = null, string valor2 = null, string valor3 = null)
         {
-            ADO_V2 adonet;
             DataTable dt = new DataTable();
-            List<RetencionesARCV> lst = new List<RetencionesARCV>();
 
             try
             {
-                adonet = new ADO_V2();
-                adonet.SP = "Lee_RetencionesARCV_ProveedorDetallesV1";
-                adonet.AgregarParametro("PE_EMPRESA", ADO_V2.enumTipo_de_Datos._varchar, valor1);
-                adonet.AgregarParametro("PE_VENDORID", ADO_V2.enumTipo_de_Datos._varchar, valor2);
-                adonet.AgregarParametro("PE_ANIO", ADO_V2.enumTipo_de_Datos._nvarchar, valor3);
-                adonet.leer();
-
-                dt = adonet.DS.Tables[0];
+                var parameters = new Dictionary<string, object>
+                {
+                    { "PE_EMPRESA", valor1 },
+                    { "PE_VENDORID", valor2 },
+                    { "PE_ANIO", valor3 }
+                };
+                dt = ExecuteStoredProcedure("Lee_RetencionesARCV_ProveedorDetallesV1", parameters);
             }
             catch (Exception ex)
             {
-                string Ex = ex.Message;
                 Log(ex.Message);
-                dt = null;
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
             }
 
             HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
-            byte[] tmp = ExportARCV_to_Excel_Byte(dt);
-
-            return tmp;
+            return ExportARCV_to_Excel_Byte(dt);
         }
 
         private byte[] ExportARCV_to_Excel_Byte(DataTable dt_Consulta)
@@ -545,10 +497,8 @@ namespace restAPI_RetencionesV1.Controllers
             try
             {
                 var file = "Formato_ARCV.xlsx";
-                var strFilePath = AppDomain.CurrentDomain.BaseDirectory + @"Resources\Template\" + file;
-
-                vByte = excel.Generar_Excel_RetencionesARCV(dt_Consulta, strFilePath);
-
+                var strFilePathTemplate = AppDomain.CurrentDomain.BaseDirectory + @"Resources\Template\" + file;
+                vByte = excel.Generar_Excel_RetencionesARCV(dt_Consulta, strFilePathTemplate);
                 var vDirectorio = @"C:\temp2\";
 
                 if (!Directory.Exists(vDirectorio))
@@ -556,11 +506,14 @@ namespace restAPI_RetencionesV1.Controllers
                     Directory.CreateDirectory(vDirectorio);
                 }
 
-                bool resp = ByteArrayToFile(vDirectorio + DateTime.Now.Year.ToString() + DateTime.Now.Month.ToString() + DateTime.Now.Day.ToString() + "_" + DateTime.Now.Hour.ToString() + DateTime.Now.Minute.ToString() + DateTime.Now.Second.ToString() + " - ARCV - " + dt_Consulta.Rows[0][4].ToString() + ".xlsx", vByte);
+                if (dt_Consulta != null && dt_Consulta.Rows.Count > 0)
+                {
+                    bool resp = ByteArrayToFile(vDirectorio + DateTime.Now.Year.ToString() + DateTime.Now.Month.ToString() + DateTime.Now.Day.ToString() + "_" + DateTime.Now.Hour.ToString() + DateTime.Now.Minute.ToString() + DateTime.Now.Second.ToString() + " - ARCV - " + dt_Consulta.Rows[0][4].ToString() + ".xlsx", vByte);
+                }
             }
             catch (Exception ex)
             {
-                string msg = ex.Message;
+                Log(ex.Message);
             }
 
             return vByte;
@@ -569,20 +522,33 @@ namespace restAPI_RetencionesV1.Controllers
         #endregion
 
         [HttpGet]
+        [Route("GetRetenciones_ISLR_Preview/{valor1?}")]
         public IHttpActionResult GetRetenciones_ISLR_Preview(string valor1 = null)
         {
-            ADO_V2 adonet = new ADO_V2();
-            adonet.SP = "SP_CR_ISLR_PORTAL";
-            adonet.AgregarParametro("SN1", ADO_V2.enumTipo_de_Datos._nvarchar, valor1);
-            adonet.leer();
-            var dt = adonet.DS.Tables[0];
+            try
+            {
+                var parameters = new Dictionary<string, object>
+                {
+                    { "SN1", valor1 }
+                };
+                DataTable dt = ExecuteStoredProcedure("SP_CR_ISLR_PORTAL", parameters);
 
-            var list = dt.AsEnumerable()
-                .Select(r => dt.Columns.Cast<DataColumn>()
-                    .ToDictionary(c => c.ColumnName, c => r.IsNull(c) ? null : r[c]))
-                .ToList();
+                if (dt == null || dt.Rows.Count == 0)
+                {
+                    return Content(HttpStatusCode.InternalServerError, new { Message = "El procedimiento almacenado no devolvió datos, o falló la conexión." });
+                }
 
-            return Ok(new { RowCount = dt.Rows.Count, Data = list });
+                var list = dt.AsEnumerable()
+                    .Select(r => dt.Columns.Cast<DataColumn>()
+                        .ToDictionary(c => c.ColumnName, c => r.IsNull(c) ? null : r[c]))
+                    .ToList();
+
+                return Ok(new { RowCount = dt.Rows.Count, Data = list });
+            }
+            catch (Exception ex)
+            {
+                return InternalServerError(ex);
+            }
         }
     }
 }
