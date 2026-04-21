@@ -1,0 +1,40 @@
+﻿//Obtiene las retenciones asociadas a un proveedor
+http://localhost:1503/api/Retenciones/GetProveedores_Retenciones/RPDAR/J-000841918
+
+//Obtiene el detalle de una retencion 
+http://localhost:1503/api/Retenciones/GetProveedores_RetencionesDetalles/RPDAR/J-000841918/2022-01-00000236
+
+// generar un json con la data y guarda en el disco local un archivo excel, parametro N --> no lo generar, parametro Y --> lo generar, se debe pasar el 4 parametro como null, si se va a pasar el parametro numero 5
+http://localhost:1503/api/Retenciones/GetRetenciones/RPDAR/J-000841918/2022-01-00000236/null/Y
+http://localhost:1503/api/Retenciones/GetRetenciones/RPDAR/J-000841918/2022-01-00000236
+
+
+
+//generar un archivo excel en formar arreglo de byte
+http://localhost:1503/api/Retenciones/GetRetenciones_xls/RPDAR/J-000841918/2022-01-00000236
+
+
+
+// DESDE SQL SERVER 
+exec [dbo].[Lee_RetencionesIVA_Proveedores] 'RPDAR','J-000841918'
+exec [dbo].[Lee_RetencionesIVA_ProveedoresDetalles] 'RPDAR','J-000841918','2022-01-00000236'
+exec [dbo].[Lee_RetencionesIVA_ProveedorDetallesV1] 'RPDAR','J-000841918','2022-01-00000236'
+
+
+
+// EN PRODUCCION
+http://172.20.5.239/restAPI_Retenciones/api/Retenciones/GetProveedores_Retenciones/RPDAR/J-000841918
+http://172.20.5.239/restAPI_Retenciones/api/Retenciones/GetProveedores_RetencionesDetalles/RPDAR/J-000841918/2022-01-00000236
+
+http://172.20.5.239/restAPI_Retenciones/api/Retenciones/GetRetenciones/RPDAR/J-000841918/2022-01-00000236
+http://172.20.5.239/restAPI_Retenciones/api/Retenciones/Retenciones/GetRetenciones_xls/RPDAR/J-000841918/2022-01-00000236
+
+
+
+http://172.20.5.239/restAPI_Retenciones/api/Retenciones/GetProveedores_Retenciones/RPDAR/J-000841918
+http://172.20.5.239/restAPI_Retenciones/api/Retenciones/GetProveedores_RetencionesDetalles/RPDAR/J-000841918/2022-05-00000336
+http://172.20.5.239/restAPI_Retenciones/api/Retenciones/Retenciones/GetRetenciones_xls/RPDAR/J-000841918/2022-01-00000236
+
+
+
+
