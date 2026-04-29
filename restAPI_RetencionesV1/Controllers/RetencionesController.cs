@@ -28,19 +28,30 @@ namespace restAPI_RetencionesV1.Controllers
         {
         }
 
-        private DataTable ExecuteStoredProcedure(string spName, Dictionary<string, object> parameters = null)
+        private DataTable ExecuteStoredProcedure(string spName, Dictionary<string, object> parameters = null, string connectionKey = "SAP")
         {
-            var connectString = ConfigurationManager.AppSettings["SAP"];
+            var connectString = ConfigurationManager.AppSettings[connectionKey];
+            if (string.IsNullOrEmpty(connectString))
+            {
+                throw new Exception($"No se encontró la configuración de conexión para la clave: {connectionKey} en AppSettings.");
+            }
+
             using (SqlConnection conn = new SqlConnection(connectString))
             {
                 using (SqlCommand cmd = new SqlCommand(spName, conn))
                 {
                     cmd.CommandType = CommandType.StoredProcedure;
+                    cmd.CommandTimeout = 300; // Aumentamos timeout a 5 minutos por si acaso
+
                     if (parameters != null)
                     {
                         foreach (var param in parameters)
                         {
-                            cmd.Parameters.AddWithValue("@" + param.Key, param.Value ?? DBNull.Value);
+                            object val = param.Value;
+                            // Si el valor es el string "null" (común en llamadas API), lo tratamos como DBNull
+                            if (val != null && val.ToString().ToUpper() == "NULL") val = DBNull.Value;
+                            
+                            cmd.Parameters.AddWithValue("@" + param.Key, val ?? DBNull.Value);
                         }
                     }
 
@@ -460,6 +471,7 @@ namespace restAPI_RetencionesV1.Controllers
 
         public void Log(string mensaje)
         {
+            System.Diagnostics.Debug.WriteLine(mensaje);
         }
 
         #region ARCV
@@ -473,18 +485,33 @@ namespace restAPI_RetencionesV1.Controllers
 
             try
             {
-                var parameters = new Dictionary<string, object>
+                var parameters = new Dictionary<string, object>();
+                
+                // Solo agregamos los parámetros si no son nulos para permitir que el SP use sus valores por defecto si aplica
+                if (!string.IsNullOrEmpty(valor1) && valor1.ToUpper() != "NULL") parameters.Add("PE_EMPRESA", valor1);
+                if (!string.IsNullOrEmpty(valor2) && valor2.ToUpper() != "NULL") parameters.Add("PE_VENDORID", valor2);
+                
+                if (!string.IsNullOrEmpty(valor3) && valor3.ToUpper() != "NULL")
                 {
-                    { "PE_EMPRESA", valor1 },
-                    { "PE_VENDORID", valor2 },
-                    { "PE_ANIO", valor3 }
-                };
-                dt = ExecuteStoredProcedure("Lee_RetencionesARCV_ProveedorDetallesV1", parameters);
+                    int anio;
+                    if (int.TryParse(valor3, out anio))
+                    {
+                        parameters.Add("PE_ANIO", anio);
+                    }
+                    else
+                    {
+                        parameters.Add("PE_ANIO", valor3);
+                    }
+                }
+
+                // Forzamos el uso de la conexión OFC (InterfacesYProgramas) para este método
+                dt = ExecuteStoredProcedure("Lee_RetencionesARCV_ProveedorDetallesV1", parameters, "OFC");
             }
             catch (Exception ex)
             {
-                Log(ex.Message);
-                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, ex));
+                Log("Error en GetRetenciones_ARCV_xls: " + ex.Message);
+                if (Request != null) throw new HttpResponseException(Request.CreateErrorResponse(HttpStatusCode.InternalServerError, "Error al ejecutar el SP en OFC: " + ex.Message));
+                else throw;
             }
 
             HttpContext.Current.Response.AddHeader("Access-Control-Allow-Origin", "*");
